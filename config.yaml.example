@@ -1,0 +1,34 @@
+# /etc/tunnelgate/config.yaml
+domain: tunnel.example.com
+email: admin@example.com
+
+# Backend SSH server (localhost only)
+backend_host: 127.0.0.1
+backend_port: 109
+
+# Proxy core settings
+proxy:
+  listen_host: 127.0.0.1
+  listen_port: 8888
+  idle_timeout_seconds: 180
+  shared_pass: ""   # optional shared secret for X‑Real‑Host
+
+# API server (admin)
+api:
+  listen_host: 127.0.0.1
+  listen_port: 8080
+  token: "your-secure-api-token"
+
+# Nginx configuration
+nginx:
+  http_ports: [80]
+  tls_ports: [443]
+
+# Certificate method: "le_http01", "le_dns_cf", "cf_origin", "selfsigned"
+cert_method: le_http01
+cf_api_token: ""   # for le_dns_cf
+cf_email: ""       # for cf_origin
+cf_global_api_key: ""  # for cf_origin
+
+# Database
+database: /var/lib/tunnelgate/users.db
