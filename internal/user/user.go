@@ -20,11 +20,11 @@ type User struct {
 
 var db *sql.DB
 
-func InitDB(path string) error {
+func InitDB(path string) (*sql.DB, error) {
     var err error
     db, err = sql.Open("sqlite3", path)
     if err != nil {
-        return err
+        return nil, fmt.Errorf("open db: %w", err)
     }
     _, err = db.Exec(`
         CREATE TABLE IF NOT EXISTS users (
@@ -36,12 +36,19 @@ func InitDB(path string) error {
         );
         CREATE INDEX IF NOT EXISTS idx_username ON users(username);
     `)
-    return err
+    if err != nil {
+        return nil, fmt.Errorf("create table: %w", err)
+    }
+    return db, nil
 }
 
 func OpenDB(path string) *sql.DB {
     if db == nil {
-        InitDB(path)
+        var err error
+        db, err = InitDB(path)
+        if err != nil {
+            panic(err)
+        }
     }
     return db
 }
@@ -58,23 +65,42 @@ func Authenticate(db *sql.DB, username, password string) bool {
 
 func AddUser(db *sql.DB, username, password string, days int) (*User, error) {
     if username == "" {
-        return nil, errors.New("username required")
+        return nil, errors.New("username cannot be empty")
     }
-    hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+    if len(password) < 6 {
+        return nil, errors.New("password must be at least 6 characters")
+    }
+
+    hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+    if err != nil {
+        return nil, fmt.Errorf("hash password: %w", err)
+    }
+
     expiry := time.Now().AddDate(0, 0, days)
-    res, err := db.Exec("INSERT INTO users (username, password_hash, expiry) VALUES (?, ?, ?)",
+    tx, err := db.Begin()
+    if err != nil {
+        return nil, fmt.Errorf("begin tx: %w", err)
+    }
+    defer tx.Rollback()
+
+    res, err := tx.Exec("INSERT INTO users (username, password_hash, expiry) VALUES (?, ?, ?)",
         username, hash, expiry.Format(time.RFC3339))
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("insert user: %w", err)
     }
+
     id, _ := res.LastInsertId()
-    return &User{ID: int(id), Username: username, Expiry: expiry}, nil
+    if err := tx.Commit(); err != nil {
+        return nil, fmt.Errorf("commit tx: %w", err)
+    }
+
+    return &User{ID: int(id), Username: username, Expiry: expiry, Locked: false}, nil
 }
 
 func ListUsers(db *sql.DB) ([]User, error) {
     rows, err := db.Query("SELECT id, username, expiry, locked FROM users ORDER BY username")
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("query users: %w", err)
     }
     defer rows.Close()
     var users []User
@@ -91,5 +117,8 @@ func ListUsers(db *sql.DB) ([]User, error) {
 func CountUsers(db *sql.DB) (int, error) {
     var count int
     err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
-    return count, err
+    if err != nil {
+        return 0, fmt.Errorf("count users: %w", err)
+    }
+    return count, nil
 }
