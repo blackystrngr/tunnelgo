@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TunnelGate – Installer (uses latest Nginx from official repo)
+# TunnelGate – Installer (uses standard apt Nginx from OS repo)
 # Usage: sudo ./install.sh [--clean]
 
 set -euo pipefail
@@ -60,77 +60,55 @@ fi
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
-    VERSION_CODENAME=${VERSION_CODENAME:-}
 else
     log_error "Cannot detect OS."
     exit 1
 fi
 case $OS in
-    debian|ubuntu) log_info "Detected $OS $VERSION_CODENAME" ;;
+    debian|ubuntu) log_info "Detected $OS" ;;
     *) log_error "Unsupported OS: $OS"; exit 1 ;;
 esac
 
 # =====================================================================
-# INSTALL LATEST NGINX FROM OFFICIAL REPO
+# INSTALL DEPENDENCIES (including Nginx from apt)
 # =====================================================================
-log_step "Installing latest Nginx from official repository..."
-
-# Remove any existing distro nginx
-apt-get remove -y nginx nginx-common nginx-core nginx-full 2>/dev/null || true
-rm -rf /etc/nginx 2>/dev/null || true
-
-# Install prerequisites
+log_step "Updating package lists..."
 apt-get update -y
-apt-get install -y curl gnupg2 ca-certificates lsb-release ubuntu-keyring
 
-# Import official signing key
-curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor \
-    | tee /usr/share/keyrings/nginx-archive-keyring.gpg >/dev/null
-
-# Determine repo line
-if [[ "$OS" == "ubuntu" ]]; then
-    CODENAME=$(lsb_release -cs)
-    REPO_LINE="deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu/ $CODENAME nginx"
-elif [[ "$OS" == "debian" ]]; then
-    CODENAME=$(lsb_release -cs)
-    REPO_LINE="deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/debian/ $CODENAME nginx"
-else
-    log_error "Unsupported OS for official Nginx repo."
-    exit 1
-fi
-
-# Add repository
-echo "$REPO_LINE" | tee /etc/apt/sources.list.d/nginx.list
-
-# Pin the official repo to have higher priority
-cat > /etc/apt/preferences.d/nginx <<'EOF'
-Package: *
-Pin: origin nginx.org
-Pin-Priority: 1000
-EOF
-
-# Update and install
-apt-get update -y
-apt-get install -y nginx
-
-# Verify installation
-if ! nginx -v 2>&1 | grep -q "nginx/"; then
-    log_error "Nginx installation failed."
-    exit 1
-fi
-log_info "Nginx installed: $(nginx -v 2>&1)"
-
-# =====================================================================
-# INSTALL OTHER DEPENDENCIES
-# =====================================================================
-log_step "Installing other dependencies..."
+log_step "Installing Nginx and other dependencies..."
 apt-get install -y \
     curl wget git make \
+    nginx-extras \
     certbot python3-certbot-nginx \
     dropbear \
     iptables iptables-persistent \
     openssl sqlite3 \
     net-tools lsof
+
+# Verify Nginx stream module
+if ! nginx -V 2>&1 | grep -q with-stream; then
+    log_error "Nginx stream module missing. Please install nginx-extras manually."
+    exit 1
+fi
+
+# =====================================================================
+# ENSURE NGINX CONFIG DIRS EXIST
+# =====================================================================
+mkdir -p /etc/nginx /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+# If nginx.conf doesn't exist, create minimal
+if [[ ! -f /etc/nginx/nginx.conf ]]; then
+    log_info "Creating minimal nginx.conf..."
+    cat > /etc/nginx/nginx.conf <<'EOF'
+events {
+    worker_connections 1024;
+}
+
+stream {
+    include /etc/nginx/stream.conf;
+}
+EOF
+fi
 
 # =====================================================================
 # INSTALL GO
@@ -341,7 +319,7 @@ chmod 600 "$CERT_DIR/"*.pem 2>/dev/null || true
 # =====================================================================
 log_step "Configuring Nginx..."
 
-# Ensure nginx.conf exists with stream block
+# Ensure nginx.conf has stream include
 if ! grep -q "stream {" /etc/nginx/nginx.conf; then
     log_info "Adding stream block to nginx.conf..."
     echo "stream {" >> /etc/nginx/nginx.conf
