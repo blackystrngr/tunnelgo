@@ -38,7 +38,6 @@ log_step()  { echo -e "${BLUE}[*]${NC} $(date +'%Y-%m-%d %H:%M:%S') $*"; }
 cleanup_all() {
     log_warn "Performing cleanup (certificates in $CERT_DIR will be preserved)..."
 
-    # Stop services
     for svc in proxy api renew; do
         systemctl stop "${SERVICE_PREFIX}-${svc}.service" 2>/dev/null || true
         systemctl disable "${SERVICE_PREFIX}-${svc}.service" 2>/dev/null || true
@@ -91,12 +90,12 @@ case $OS in
 esac
 
 # ---------------------------------------------------------------------
-# Install dependencies
+# Install base packages (excluding go)
 # ---------------------------------------------------------------------
 log_step "Installing system packages..."
 apt-get update -y
 apt-get install -y \
-    curl wget git make golang-go \
+    curl wget git make \
     nginx-extras certbot python3-certbot-nginx \
     dropbear iptables iptables-persistent \
     openssl sqlite3
@@ -105,6 +104,32 @@ if ! nginx -V 2>&1 | grep -q with-stream; then
     log_error "Nginx installed without stream module. Please install nginx-extras manually."
     exit 1
 fi
+
+# ---------------------------------------------------------------------
+# Install Go 1.23 from official tarball
+# ---------------------------------------------------------------------
+log_step "Installing Go 1.23..."
+GO_VERSION="1.23.0"
+GO_ARCH="linux-amd64"
+if [[ "$(uname -m)" == "aarch64" ]]; then
+    GO_ARCH="linux-arm64"
+fi
+
+cd /tmp
+rm -f "go${GO_VERSION}.${GO_ARCH}.tar.gz"
+wget -q "https://go.dev/dl/go${GO_VERSION}.${GO_ARCH}.tar.gz"
+rm -rf /usr/local/go
+tar -C /usr/local -xzf "go${GO_VERSION}.${GO_ARCH}.tar.gz"
+rm -f "go${GO_VERSION}.${GO_ARCH}.tar.gz"
+
+# Set PATH for this session
+export PATH="/usr/local/go/bin:$PATH"
+# Also add to /etc/profile for future sessions
+if ! grep -q "export PATH=/usr/local/go/bin" /etc/profile; then
+    echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
+fi
+
+log_info "Go installed: $(go version)"
 
 # ---------------------------------------------------------------------
 # Clone/update source (with forced reset)
@@ -126,7 +151,7 @@ fi
 # ---------------------------------------------------------------------
 log_step "Cleaning Go module cache and updating dependencies..."
 go clean -modcache
-go get -u all
+go mod download
 go mod tidy
 
 # ---------------------------------------------------------------------
